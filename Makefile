@@ -207,18 +207,6 @@ shell: | $(BUILD_DIRS)
 	    $(BUILD_IMAGE)                                          \
 	    /bin/sh $(CMD)
 
-LICENSES = .licenses
-
-$(LICENSES): | $(BUILD_DIRS)
-	pushd tools >/dev/null;                      \
-	  unset GOOS; unset GOARCH;                  \
-	  export GOBIN=$$(pwd)/../bin/tools;         \
-	  go install github.com/google/go-licenses;  \
-	  popd >/dev/null
-	rm -rf $(LICENSES)
-	./bin/tools/go-licenses save ./... --save_path=$(LICENSES)
-	chmod -R a+rx $(LICENSES)
-
 CONTAINER_DOTFILES = $(foreach bin,$(BINS),.container-$(subst /,_,$(REGISTRY)/$(bin))-$(TAG))
 
 # We print the container names here, rather than in CONTAINER_DOTFILES so
@@ -236,7 +224,7 @@ $(foreach bin,$(BINS),$(eval $(strip                                 \
     .container-$(subst /,_,$(REGISTRY)/$(bin))-$(TAG): BIN = $(bin)  \
 )))
 $(foreach bin,$(BINS),$(eval                                         \
-    .container-$(subst /,_,$(REGISTRY)/$(bin))-$(TAG): bin/$(OS)_$(ARCH)/$(bin)$(BIN_EXTENSION) $(LICENSES) Dockerfile.in  \
+    .container-$(subst /,_,$(REGISTRY)/$(bin))-$(TAG): bin/$(OS)_$(ARCH)/$(bin)$(BIN_EXTENSION) Dockerfile.in  \
 ))
 # This is the target definition for all container-dotfiles.
 # These are used to track build state in hidden files.
@@ -248,15 +236,12 @@ $(CONTAINER_DOTFILES): .buildx-initialized
 	    -e 's|{ARG_OS}|$(OS)|g'                    \
 	    -e 's|{ARG_FROM}|$(BASE_IMAGE)|g'          \
 	    Dockerfile.in > .dockerfile-$(BIN)-$(OS)_$(ARCH)
-	HASH_LICENSES=$$(find $(LICENSES) -type f                       \
-		    | xargs md5sum | md5sum | cut -f1 -d' ');           \
 	HASH_BINARY=$$(md5sum bin/$(OS)_$(ARCH)/$(BIN)$(BIN_EXTENSION)  \
 		    | cut -f1 -d' ');                                   \
 	FORCE=0;                                                        \
 	docker buildx build                                             \
 	    --builder "$(BUILDX_NAME)"                                  \
 	    --build-arg FORCE_REBUILD="$$FORCE"                         \
-	    --build-arg HASH_LICENSES="$$HASH_LICENSES"                 \
 	    --build-arg HASH_BINARY="$$HASH_BINARY"                     \
 	    --progress=plain                                            \
 	    --load                                                      \
@@ -349,7 +334,7 @@ clean: # @HELP removes built binaries and temporary files
 clean: container-clean bin-clean
 
 container-clean:
-	rm -rf .container-* .dockerfile-* .push-* .buildx-initialized $(LICENSES)
+	rm -rf .container-* .dockerfile-* .push-* .buildx-initialized
 
 bin-clean:
 	test -d .go && chmod -R u+w .go || true
