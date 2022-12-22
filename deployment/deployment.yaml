@@ -1,0 +1,138 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: agents-operator-config
+  namespace: accuknox-agents
+data:
+  conf.yaml: |-
+    agent:
+      - name: feeder-service
+        container: 
+        - resource:
+          - type: cpu
+            request:
+              - multiplier: 50
+              - upper-bound: 200000
+            limit:
+              - multiplier: 100
+              - upper-bound: 200000
+          - type: memory
+            request:
+              - multiplier: 100
+              - upper-bound: 1000
+            limit:
+              - multiplier: 200
+              - upper-bound: 2000
+      - name: shared-informer-agent
+        container: 
+        - resource:
+          - type: cpu
+            request:
+              - multiplier: 200
+              - upper-bound: 200000
+            limit:
+              - multiplier: 200
+              - upper-bound: 200000
+          - type: memory
+            request:
+              - multiplier: 10
+              - upper-bound: 500
+            limit:
+              - multiplier: 50
+              - upper-bound: 500
+      - name: policy-enforcement-agent
+        container: 
+        - resource:
+          - type: cpu
+            request:
+              - multiplier: 300
+              - upper-bound: 200000
+            limit:
+              - multiplier: 300
+              - upper-bound: 200000
+          - type: memory
+            request:
+              - multiplier: 10
+              - upper-bound: 500
+            limit:
+              - multiplier: 50
+              - upper-bound: 500
+      - name: discovery-engine
+        container: 
+        - resource:
+          - type: cpu
+            request:
+              - multiplier: 400
+              - upper-bound: 200000
+            limit:
+              - multiplier: 400
+              - upper-bound: 200000
+          - type: memory
+            request:
+              - multiplier: 100
+              - upper-bound: 2000
+            limit:
+              - multiplier: 100
+              - upper-bound: 2000
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agents-operator
+  namespace: accuknox-agents
+  labels:
+    deployment: agents-operator
+spec:
+  selector:
+    matchLabels:
+      app: agents-operator
+  template:
+    metadata:
+      labels:
+        app: agents-operator
+    spec:
+      serviceAccountName: agents-operator-sa
+      containers:
+      - image: accuknox/agents-operator:latest
+        imagePullPolicy: Always
+        name: agents-operator
+        volumeMounts:
+          - mountPath: /conf
+            name: config-volume
+            readOnly: true
+      volumes:
+        - name: config-volume
+          configMap:
+            name: agents-operator-config
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: agents-operator-sa
+  namespace: accuknox-agents
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  creationTimestamp: null
+  name: agents-operator-role
+rules:
+- apiGroups: [""] 
+  resources: [ "nodes", "configmaps"]
+  verbs: [ "get", "list", "watch"]
+- apiGroups: ["*"] 
+  resources: [ "deployments"]
+  verbs: [ "get", "list", "watch", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: operator-rolebinding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: agents-operator-role
+subjects:
+- kind: ServiceAccount
+  name: agents-operator-sa
+  namespace: accuknox-agents
