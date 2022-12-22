@@ -242,7 +242,6 @@ $(CONTAINER_DOTFILES): .buildx-initialized
 	docker buildx build                                             \
 	    --builder "$(BUILDX_NAME)"                                  \
 	    --build-arg FORCE_REBUILD="$$FORCE"                         \
-	    --build-arg HASH_LICENSES="$$HASH_LICENSES"                 \
 	    --build-arg HASH_BINARY="$$HASH_BINARY"                     \
 	    --progress=plain                                            \
 	    --load                                                      \
