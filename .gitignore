@@ -1,2 +1,7 @@
-# Agent Operator
-agents-operator
+/bin
+/.go
+/.push-*
+/.container-*
+/.dockerfile-*
+/.licenses
+/.buildx-initialized

@@ -96,11 +96,14 @@ func updateAgentResource(clientset *kubernetes.Clientset, configMap *v1.ConfigMa
 		cpuLimit = int64(cpuLimitUB)
 	}
 
-	memReq := int64(nodesCount * memReqMultiplier * 1073741824) // value in Gi
-
-	memLimit := int64(nodesCount * memLimitMultiplier * 1073741824) // value in Gi
-	if memLimit > int64(memLimitUB*10737418240) {                   // upper bound value in Gi
-		memLimit = int64(memLimitUB * 10737418240)
+	mebibyte := 1048576
+	memReq := int64(nodesCount * memReqMultiplier * mebibyte) // value in Mi
+	memLimit := int64(nodesCount * memLimitMultiplier * mebibyte)
+	if memReq > int64(memLimitUB*mebibyte) {
+		memReq = int64(memLimitUB * mebibyte)
+	}
+	if memLimit > int64(memLimitUB*mebibyte) {
+		memLimit = int64(memLimitUB * mebibyte)
 	}
 
 	// Deployment
@@ -159,6 +162,7 @@ func updateAgentResource(clientset *kubernetes.Clientset, configMap *v1.ConfigMa
 // use the event types (added or deleted)
 // Package the code in Dockerfile and use deployment.yaml
 
+/*
 func watchPodsUpdate(clientset *kubernetes.Clientset, agentConfig, namespace string, nodesCount int) {
 	// Create a new context
 	ctx, cancel := context.WithCancel(context.Background())
@@ -172,72 +176,73 @@ func watchPodsUpdate(clientset *kubernetes.Clientset, agentConfig, namespace str
 	defer watcher.Stop()
 
 	for {
-		select {
-		case event, ok := <-watcher.ResultChan():
-			if !ok {
-				// Watcher channel was closed
-				return
+		event, ok := <-watcher.ResultChan()
+		if !ok {
+			// Watcher channel was closed
+			return
+		}
+
+		// Check if a new pod was added
+		if event.Type != "ADDED" {
+			continue
+		}
+		pod, ok := event.Object.(*v1.Pod)
+		if !ok {
+			continue
+		}
+		// time.Sleep(8 * time.Second)
+
+		// Loop until all deployments are ready
+		for {
+			deployments, err := clientset.AppsV1().Deployments(namespace).List(context.TODO(), metav1.ListOptions{})
+			if err != nil {
+				panic(err)
 			}
 
-			// Check if a new pod was added
-			if event.Type == "ADDED" {
-				pod, ok := event.Object.(*v1.Pod)
-				if ok {
-					// time.Sleep(8 * time.Second)
-
-					// Loop until all deployments are ready
-					for {
-						deployments, err := clientset.AppsV1().Deployments(namespace).List(context.TODO(), metav1.ListOptions{})
-						if err != nil {
-							panic(err)
-						}
-
-						allReady := true
-						for _, deployment := range deployments.Items {
-							if deployment.Status.ReadyReplicas != *deployment.Spec.Replicas {
-								allReady = false
-								break
-							}
-						}
-
-						if allReady {
-							break
-						}
-
-						time.Sleep(2 * time.Second)
-					}
-
-					var name string
-					configMap, err := clientset.CoreV1().ConfigMaps(namespace).Get(context.TODO(), agentConfig, metav1.GetOptions{})
-					if err != nil {
-						fmt.Println(err)
-						return
-					}
-
-					var conf AgentConfig
-					err = yaml.Unmarshal([]byte(configMap.Data["conf.yaml"]), &conf)
-					if err != nil {
-						// handle error
-						fmt.Println(err)
-					}
-
-					for i, resource := range conf.Agent {
-						fmt.Println("\nresourceName")
-						fmt.Println(resource.Name)
-						name = resource.Name
-						err = updateAgentResource(clientset, configMap, i, nodesCount, name, namespace)
-						if err != nil {
-							panic(err)
-						}
-					}
-
-					// Print the newly added pod
-					fmt.Printf("New pod added: %s\n", pod.Name)
+			allReady := true
+			for _, deployment := range deployments.Items {
+				if deployment.Status.ReadyReplicas != *deployment.Spec.Replicas {
+					allReady = false
+					break
 				}
 			}
+
+			if allReady {
+				break
+			}
+
+			time.Sleep(2 * time.Second)
 		}
+
+		var name string
+		configMap, err := clientset.CoreV1().ConfigMaps(namespace).Get(context.TODO(), agentConfig, metav1.GetOptions{})
+		if err != nil {
+			fmt.Println(err)
+			return
+		}
+
+		var conf AgentConfig
+		err = yaml.Unmarshal([]byte(configMap.Data["conf.yaml"]), &conf)
+		if err != nil {
+			// handle error
+			fmt.Println(err)
+		}
+
+		for i, resource := range conf.Agent {
+			fmt.Println("\nresourceName")
+			fmt.Println(resource.Name)
+			name = resource.Name
+			err = updateAgentResource(clientset, configMap, i, nodesCount, name, namespace)
+			if err != nil {
+				panic(err)
+			}
+		}
+
+		// Print the newly added pod
+		fmt.Printf("New pod added: %s\n", pod.Name)
 	}
 }
+*/
 
 func watchNodesUpdate(clientset *kubernetes.Clientset, namespace string) {
 	// Create a new context
@@ -252,17 +257,15 @@ func watchNodesUpdate(clientset *kubernetes.Clientset, namespace string) {
 	defer watcher.Stop()
 
 	for {
-		select {
-		case <-watcher.ResultChan():
-			// Print the number of nodes in the cluster
+		<-watcher.ResultChan()
+		// Print the number of nodes in the cluster
 
-			// Listers for informer
-			nodes, err := clientset.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
-			if err != nil {
-				fmt.Println(err)
-			} else {
-				fmt.Printf("Number of nodes: %d\n", len(nodes.Items))
-			}
+		// Listers for informer
+		nodes, err := clientset.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
+		if err != nil {
+			fmt.Println(err)
+		} else {
+			fmt.Printf("Number of nodes: %d\n", len(nodes.Items))
 		}
 	}
 }
@@ -283,11 +286,7 @@ func watchConfigMap(clientset *kubernetes.Clientset, namespace, agentConfig stri
 	// Loop indefinitely
 	for {
 		select {
-		case event := <-watcher.ResultChan():
-			// Print the updated configmap data
-			configMap := event.Object.(*v1.ConfigMap)
-
-			var name string
+		case <-watcher.ResultChan():
 			configMap, err := clientset.CoreV1().ConfigMaps(namespace).Get(context.TODO(), agentConfig, metav1.GetOptions{})
 			if err != nil {
 				fmt.Println(err)
@@ -302,10 +301,8 @@ func watchConfigMap(clientset *kubernetes.Clientset, namespace, agentConfig stri
 			}
 
 			for i, resource := range conf.Agent {
-				fmt.Println("\nresourceName")
-				fmt.Println(resource.Name)
-				name = resource.Name
-				err = updateAgentResource(clientset, configMap, i, nodesCount, name, namespace)
+				fmt.Printf("resourceName:%v\n", resource.Name)
+				err = updateAgentResource(clientset, configMap, i, nodesCount, resource.Name, namespace)
 				if err != nil {
 					panic(err)
 				}
@@ -381,7 +378,7 @@ func main() {
 	go watchNodesUpdate(clientset, namespace)
 
 	// Watcher to look for Pods updates
-	go watchPodsUpdate(clientset, agentConfig, namespace, nodesCount)
+	// go watchPodsUpdate(clientset, agentConfig, namespace, nodesCount)
 
 	// Get the ConfigMap
 	configMap, err := clientset.CoreV1().ConfigMaps(namespace).Get(context.TODO(), agentConfig, metav1.GetOptions{})
@@ -426,7 +423,7 @@ func main() {
 	nodeInformer := factory.Core().V1().Nodes().Informer()
 
 	// Set up an event handler for when nodes are added or deleted.
-	nodeInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{
+	_, err = nodeInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{
 		AddFunc: func(obj interface{}) {
 			// printNodeCount(nodeInformer.GetStore())
 			for i, resource := range conf.Agent {
