@@ -96,6 +96,13 @@ spec:
       - image: accuknox/agents-operator:latest
         imagePullPolicy: Always
         name: agents-operator
+        resources:
+          limits:
+            cpu: 100m
+            memory: 100Mi
+          requests:
+            cpu: 10m
+            memory: 50Mi
         volumeMounts:
           - mountPath: /conf
             name: config-volume
@@ -114,7 +121,6 @@ metadata:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  creationTimestamp: null
   name: agents-operator-role
 rules:
 - apiGroups: [""] 
