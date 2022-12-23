@@ -124,19 +124,19 @@ func updateAgentResource(clientset *kubernetes.Clientset, configMap *v1.ConfigMa
 	// Get the original deployment as raw bytes.
 	original, err := json.Marshal(deploy1)
 	if err != nil {
-		panic(err)
+		return err
 	}
 
 	// Get the modified deployment as raw bytes.
 	modified, err := json.Marshal(deployment)
 	if err != nil {
-		panic(err)
+		return err
 	}
 
 	// Create the patch.
 	patch, err := strategicpatch.CreateTwoWayMergePatch(original, modified, appsv1.Deployment{})
 	if err != nil {
-		panic(err)
+		return err
 	}
 
 	// _, err = clientset.CoreV1().Pods("accuknox-agents").Patch(context.Background(), "shared-informer-agent-79664747c8-28q6h", types.MergePatchType, payloadBytes, metav1.PatchOptions{})
@@ -157,7 +157,8 @@ func watchConfigMap(clientset *kubernetes.Clientset, namespace, agentConfig stri
 	// Watch for changes to the configmap
 	watcher, err := clientset.CoreV1().ConfigMaps(namespace).Watch(ctx, metav1.ListOptions{FieldSelector: configMapName})
 	if err != nil {
-		panic(err)
+		fmt.Println(err)
+		return
 	}
 	defer watcher.Stop()
 
@@ -181,7 +182,8 @@ func watchConfigMap(clientset *kubernetes.Clientset, namespace, agentConfig stri
 			for i, resource := range conf.Agent {
 				err = updateAgentResource(clientset, configMap, i, nodesCount, resource.Name, namespace)
 				if err != nil {
-					panic(err)
+					fmt.Println(err)
+					return
 				}
 			}
 
@@ -200,7 +202,8 @@ func main() {
 	kubeconfig := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(rules, &clientcmd.ConfigOverrides{})
 	config, err := kubeconfig.ClientConfig()
 	if err != nil {
-		panic(err)
+		fmt.Println(err)
+		return
 	}
 
 	// create the clientset
@@ -275,7 +278,8 @@ func main() {
 					name = resource.Name
 					err = updateAgentResource(clientset, configMap, i, nodesCount, name, namespace)
 					if err != nil {
-						panic(err)
+						fmt.Println(err)
+						return
 					}
 				}
 			}
@@ -323,7 +327,8 @@ func main() {
 					name = resource.Name
 					err = updateAgentResource(clientset, configMap, i, nodesCount, name, namespace)
 					if err != nil {
-						panic(err)
+						fmt.Println(err)
+						return
 					}
 				}
 			}
@@ -355,7 +360,8 @@ func main() {
 				name = resource.Name
 				err = updateAgentResource(clientset, configMap, i, nodesCount, name, namespace)
 				if err != nil {
-					panic(err)
+					fmt.Println(err)
+					return
 				}
 			}
 		},
@@ -365,7 +371,8 @@ func main() {
 				name = resource.Name
 				err = updateAgentResource(clientset, configMap, i, nodesCount, name, namespace)
 				if err != nil {
-					panic(err)
+					fmt.Println(err)
+					return
 				}
 			}
 		},
