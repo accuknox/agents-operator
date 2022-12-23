@@ -295,8 +295,6 @@ func watchConfigMap(clientset *kubernetes.Clientset, namespace, agentConfig stri
 
 			// fmt.Println(configMap.Data)
 		case <-time.After(time.Minute):
-			// Print a message every minute to show that the program is still running
-			fmt.Println("Watching for changes to configmap...")
 		}
 	}
 }
@@ -402,6 +400,54 @@ func main() {
 					deployments, err := clientset.AppsV1().Deployments(namespace).List(context.TODO(), metav1.ListOptions{})
 					if err != nil {
 						fmt.Printf("deployment not found %v\n", deployment)
+						return
+					}
+
+					allReady := true
+					for _, deployment := range deployments.Items {
+						if deployment.Status.ReadyReplicas != *deployment.Spec.Replicas {
+							allReady = false
+							break
+						}
+					}
+
+					if allReady {
+						break
+					}
+
+					time.Sleep(2 * time.Second)
+				}
+
+				//------------------
+				for i, resource := range conf.Agent {
+					name = resource.Name
+					err = updateAgentResource(clientset, configMap, i, nodesCount, name, namespace)
+					if err != nil {
+						panic(err)
+					}
+				}
+			}
+		},
+		UpdateFunc: func(oldObj, newObj interface{}) {
+			oldDeployment, ok := oldObj.(*appsv1.Deployment)
+			if !ok {
+				return
+			}
+			newDeployment, ok := newObj.(*appsv1.Deployment)
+			if !ok {
+				return
+			}
+
+			// Check if the deployment has been updated and if it is now ready
+			if oldDeployment.ResourceVersion != newDeployment.ResourceVersion && newDeployment.Status.ReadyReplicas == *newDeployment.Spec.Replicas {
+				fmt.Printf("Deployment updated: %s\n", newDeployment.Name)
+				//-----------------
+
+				// Loop until all deployments are ready
+				for {
+					deployments, err := clientset.AppsV1().Deployments(namespace).List(context.TODO(), metav1.ListOptions{})
+					if err != nil {
+						fmt.Printf("deployment not found %v\n", newDeployment)
 						return
 					}
 
