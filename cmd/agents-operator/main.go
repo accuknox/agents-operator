@@ -3,10 +3,9 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"fmt"
-	"log"
 	"time"
 
+	"github.com/rs/zerolog/log"
 	"gopkg.in/yaml.v2"
 	appsv1 "k8s.io/api/apps/v1"
 	v1 "k8s.io/api/core/v1"
@@ -42,7 +41,7 @@ type AgentConfig struct {
 func numberOfNodes(clientset *kubernetes.Clientset) int {
 	nodes, err := clientset.CoreV1().Nodes().List(context.TODO(), metav1.ListOptions{})
 	if err != nil {
-		log.Fatalf("Failed to list nodes: %v", err)
+		log.Error().Msgf("Failed to list nodes: %v", err)
 	}
 
 	nodesCount := len(nodes.Items)
@@ -53,8 +52,7 @@ func updateAgentResource(clientset *kubernetes.Clientset, configMap *v1.ConfigMa
 	var conf AgentConfig
 	err := yaml.Unmarshal([]byte(configMap.Data["conf.yaml"]), &conf)
 	if err != nil {
-		// handle error
-		fmt.Println(err)
+		log.Error().Msg(err.Error())
 	}
 
 	// access the cpu field values
@@ -98,16 +96,9 @@ func updateAgentResource(clientset *kubernetes.Clientset, configMap *v1.ConfigMa
 		memLimit = int64(memLimitUB * mebibyte)
 	}
 
-	// Deployment
 	deployment, err := clientset.AppsV1().Deployments(namespace).Get(context.TODO(), agentName, metav1.GetOptions{})
 	if err != nil {
-		fmt.Printf("deployment not found %v %v\n", deployment, err)
-		return nil
-	}
-
-	deploy1, err := clientset.AppsV1().Deployments(namespace).Get(context.TODO(), agentName, metav1.GetOptions{})
-	if err != nil {
-		fmt.Printf("deployment not found %v %v\n", deployment, err)
+		log.Error().Msg(err.Error())
 		return nil
 	}
 
@@ -121,33 +112,39 @@ func updateAgentResource(clientset *kubernetes.Clientset, configMap *v1.ConfigMa
 		v1.ResourceMemory: *resource.NewQuantity(memLimit, resource.BinarySI),
 	}
 
-	// Get the original deployment as raw bytes.
-	original, err := json.Marshal(deploy1)
+	originalDeployment, err := clientset.AppsV1().Deployments(namespace).Get(context.TODO(), agentName, metav1.GetOptions{})
+	if err != nil {
+		log.Error().Msg(err.Error())
+		return nil
+	}
+
+	// Get the original deployment as raw bytes
+	original, err := json.Marshal(originalDeployment)
 	if err != nil {
 		return err
 	}
 
-	// Get the modified deployment as raw bytes.
+	// Get the modified deployment as raw bytes
 	modified, err := json.Marshal(deployment)
 	if err != nil {
 		return err
 	}
 
-	// Create the patch.
+	// Create the patch
 	patch, err := strategicpatch.CreateTwoWayMergePatch(original, modified, appsv1.Deployment{})
 	if err != nil {
 		return err
 	}
 
-	// _, err = clientset.CoreV1().Pods("accuknox-agents").Patch(context.Background(), "shared-informer-agent-79664747c8-28q6h", types.MergePatchType, payloadBytes, metav1.PatchOptions{})
 	_, err = clientset.AppsV1().Deployments(namespace).Patch(context.Background(), agentName, types.StrategicMergePatchType, []byte(patch), metav1.PatchOptions{})
 	if err != nil {
-		log.Fatalf("Error patching pod: %v", err)
+		log.Error().Msgf("Error patching pod: %v", err)
 	}
 
 	return nil
 }
 
+// watch "agents-operator-config" configMap for changes
 func watchConfigMap(clientset *kubernetes.Clientset, namespace, agentConfig string, nodesCount int) {
 	// Create a new context
 	ctx, cancel := context.WithCancel(context.Background())
@@ -157,7 +154,7 @@ func watchConfigMap(clientset *kubernetes.Clientset, namespace, agentConfig stri
 	// Watch for changes to the configmap
 	watcher, err := clientset.CoreV1().ConfigMaps(namespace).Watch(ctx, metav1.ListOptions{FieldSelector: configMapName})
 	if err != nil {
-		fmt.Println(err)
+		log.Error().Msg(err.Error())
 		return
 	}
 	defer watcher.Stop()
@@ -168,41 +165,63 @@ func watchConfigMap(clientset *kubernetes.Clientset, namespace, agentConfig stri
 		case <-watcher.ResultChan():
 			configMap, err := clientset.CoreV1().ConfigMaps(namespace).Get(context.TODO(), agentConfig, metav1.GetOptions{})
 			if err != nil {
-				fmt.Println(err)
+				log.Error().Msg(err.Error())
 				return
 			}
 
 			var conf AgentConfig
 			err = yaml.Unmarshal([]byte(configMap.Data["conf.yaml"]), &conf)
 			if err != nil {
-				// handle error
-				fmt.Println(err)
+				log.Error().Msg(err.Error())
 			}
 
 			for i, resource := range conf.Agent {
 				err = updateAgentResource(clientset, configMap, i, nodesCount, resource.Name, namespace)
 				if err != nil {
-					fmt.Println(err)
+					log.Error().Msg(err.Error())
 					return
 				}
 			}
 
-			// fmt.Println(configMap.Data)
 		case <-time.After(time.Minute):
+			log.Info().Msgf("Watching the agents-operator configMap changes")
 		}
 	}
 }
 
+// wait for the deployment to be ready
+func deploymentReady(clientset *kubernetes.Clientset, namespace string) {
+	// Loop until all deployments are ready
+	for {
+		deployments, err := clientset.AppsV1().Deployments(namespace).List(context.TODO(), metav1.ListOptions{})
+		if err != nil {
+			log.Error().Msgf("Deployment not found: %v", err)
+			return
+		}
+
+		allReady := true
+		for _, deployment := range deployments.Items {
+			if deployment.Status.ReadyReplicas != *deployment.Spec.Replicas {
+				allReady = false
+				break
+			}
+		}
+
+		if allReady {
+			break
+		}
+
+		time.Sleep(2 * time.Second)
+	}
+}
+
 func main() {
-
-	// var memLimit, cpuLimit int
-
 	// get the local kube config
 	rules := clientcmd.NewDefaultClientConfigLoadingRules()
 	kubeconfig := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(rules, &clientcmd.ConfigOverrides{})
 	config, err := kubeconfig.ClientConfig()
 	if err != nil {
-		fmt.Println(err)
+		log.Error().Msg(err.Error())
 		return
 	}
 
@@ -212,8 +231,8 @@ func main() {
 	nodesCount := numberOfNodes(clientset)
 
 	namespace := "accuknox-agents"
-	var name string
 	agentConfig := "agents-operator-config"
+	var name string
 
 	// Watcher to look for ConfigMap changes
 	go watchConfigMap(clientset, namespace, agentConfig, nodesCount)
@@ -221,64 +240,39 @@ func main() {
 	// Get the ConfigMap
 	configMap, err := clientset.CoreV1().ConfigMaps(namespace).Get(context.TODO(), agentConfig, metav1.GetOptions{})
 	if err != nil {
-		fmt.Println(err)
+		log.Error().Msg(err.Error())
 		return
 	}
 
 	var conf AgentConfig
 	err = yaml.Unmarshal([]byte(configMap.Data["conf.yaml"]), &conf)
 	if err != nil {
-		// handle error
-		fmt.Println(err)
+		log.Error().Msg(err.Error())
 	}
 
-	// -----------------------------------------------------------------
-	// Create a shared informer factory.
+	// Create shared informer factory
 	factory := informers.NewSharedInformerFactory(clientset, time.Second*5)
 
 	dfactory := informers.NewSharedInformerFactoryWithOptions(clientset, time.Second*30, informers.WithNamespace(namespace))
-	// -----------------
-	// Retrieve the deployment informer.
+
+	// Retrieve the deployment informer
 	deploymentInformer := dfactory.Apps().V1().Deployments().Informer()
 
-	// Set up an event handler for when deployments are added or deleted.
+	// Set up an event handler for when deployments are added or deleted
 	_, err = deploymentInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{
 		AddFunc: func(obj interface{}) {
 			// Print the name of the newly added deployment
 			deployment, ok := obj.(*appsv1.Deployment)
 			if ok {
-				fmt.Printf("New deployment added: %s\n", deployment.Name)
-				//-----------------
+				log.Info().Msgf("New deployment detected: %s", deployment.Name)
 
-				// Loop until all deployments are ready
-				for {
-					deployments, err := clientset.AppsV1().Deployments(namespace).List(context.TODO(), metav1.ListOptions{})
-					if err != nil {
-						fmt.Printf("deployment not found %v %v\n", deployment, err)
-						return
-					}
+				deploymentReady(clientset, namespace)
 
-					allReady := true
-					for _, deployment := range deployments.Items {
-						if deployment.Status.ReadyReplicas != *deployment.Spec.Replicas {
-							allReady = false
-							break
-						}
-					}
-
-					if allReady {
-						break
-					}
-
-					time.Sleep(2 * time.Second)
-				}
-
-				//------------------
 				for i, resource := range conf.Agent {
 					name = resource.Name
 					err = updateAgentResource(clientset, configMap, i, nodesCount, name, namespace)
 					if err != nil {
-						fmt.Println(err)
+						log.Error().Msg(err.Error())
 						return
 					}
 				}
@@ -296,38 +290,13 @@ func main() {
 
 			// Check if the deployment has been updated and if it is now ready
 			if oldDeployment.ResourceVersion != newDeployment.ResourceVersion && newDeployment.Status.ReadyReplicas == *newDeployment.Spec.Replicas {
-				fmt.Printf("Deployment updated: %s\n", newDeployment.Name)
-				//-----------------
-
-				// Loop until all deployments are ready
-				for {
-					deployments, err := clientset.AppsV1().Deployments(namespace).List(context.TODO(), metav1.ListOptions{})
-					if err != nil {
-						fmt.Printf("deployment not found %v %v\n", newDeployment, err)
-						return
-					}
-
-					allReady := true
-					for _, deployment := range deployments.Items {
-						if deployment.Status.ReadyReplicas != *deployment.Spec.Replicas {
-							allReady = false
-							break
-						}
-					}
-
-					if allReady {
-						break
-					}
-
-					time.Sleep(2 * time.Second)
-				}
-
-				//------------------
+				log.Info().Msgf("Deployment updated: %s", newDeployment.Name)
+				deploymentReady(clientset, namespace)
 				for i, resource := range conf.Agent {
 					name = resource.Name
 					err = updateAgentResource(clientset, configMap, i, nodesCount, name, namespace)
 					if err != nil {
-						fmt.Println(err)
+						log.Error().Msg(err.Error())
 						return
 					}
 				}
@@ -337,7 +306,7 @@ func main() {
 			// Print the name of the deleted deployment
 			deployment, ok := obj.(*appsv1.Deployment)
 			if ok {
-				fmt.Printf("Deployment deleted: %s\n", deployment.Name)
+				log.Info().Msgf("Deployment deleted: %s", deployment.Name)
 			}
 		},
 	})
@@ -346,38 +315,36 @@ func main() {
 	stopCh := make(chan struct{})
 	defer close(stopCh)
 
-	// Run the informer with the stop channel.
+	// Run the informer with the stop channel
 	deploymentInformer.Run(stopCh)
 
-	// Retrieve the node informer.
+	// Retrieve the node informer
 	nodeInformer := factory.Core().V1().Nodes().Informer()
 
-	// Set up an event handler for when nodes are added or deleted.
+	// Set up an event handler for when nodes are added or deleted
 	_, err = nodeInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{
 		AddFunc: func(obj interface{}) {
-			// printNodeCount(nodeInformer.GetStore())
 			for i, resource := range conf.Agent {
 				name = resource.Name
 				err = updateAgentResource(clientset, configMap, i, nodesCount, name, namespace)
 				if err != nil {
-					fmt.Println(err)
+					log.Error().Msg(err.Error())
 					return
 				}
 			}
 		},
 		DeleteFunc: func(obj interface{}) {
-			// printNodeCount(nodeInformer.GetStore())
 			for i, resource := range conf.Agent {
 				name = resource.Name
 				err = updateAgentResource(clientset, configMap, i, nodesCount, name, namespace)
 				if err != nil {
-					fmt.Println(err)
+					log.Error().Msg(err.Error())
 					return
 				}
 			}
 		},
 	})
 
-	// Run the informer with the stop channel.
+	// Run the informer with the stop channel
 	nodeInformer.Run(stopCh)
 }
