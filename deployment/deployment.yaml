@@ -11,68 +11,68 @@ data:
         - resource:
           - type: cpu
             request:
-              - multiplier: 50
+              - value: (n/5 + 1)*50
               - upper-bound: 5000
             limit:
-              - multiplier: 100
+              - value: (n/5 + 1)*100
               - upper-bound: 10000
           - type: memory
             request:
-              - multiplier: 100
+              - value: (n/5 + 1)*100
               - upper-bound: 10000
             limit:
-              - multiplier: 200
+              - value: (n/5 + 1)*200
               - upper-bound: 20000
       - name: shared-informer-agent
         container: 
         - resource:
           - type: cpu
             request:
-              - multiplier: 20
+              - value: (n/5 + 1)*20
               - upper-bound: 2000
             limit:
-              - multiplier: 50
+              - value: (n/5 + 1)*50
               - upper-bound: 5000
           - type: memory
             request:
-              - multiplier: 50
+              - value: (n/5 + 1)*50
               - upper-bound: 5000
             limit:
-              - multiplier: 100
+              - value: (n/5 + 1)*100
               - upper-bound: 10000
       - name: policy-enforcement-agent
         container: 
         - resource:
           - type: cpu
             request:
-              - multiplier: 10
+              - value: (n/5 + 1)*10
               - upper-bound: 1000
             limit:
-              - multiplier: 30
+              - value: (n/5 + 1)*30
               - upper-bound: 3000
           - type: memory
             request:
-              - multiplier: 20
+              - value: (n/5 + 1)*20
               - upper-bound: 2000
             limit:
-              - multiplier: 50
+              - value: (n/5 + 1)*50
               - upper-bound: 5000
       - name: discovery-engine
         container: 
         - resource:
           - type: cpu
             request:
-              - multiplier: 100
+              - value: (n/5 + 1)*100
               - upper-bound: 10000
             limit:
-              - multiplier: 200
+              - value: (n/5 + 1)*200
               - upper-bound: 20000
           - type: memory
             request:
-              - multiplier: 100
+              - value: (n/5 + 1)*100
               - upper-bound: 10000
             limit:
-              - multiplier: 200
+              - value: (n/5 + 1)*200
               - upper-bound: 20000
 ---
 apiVersion: apps/v1

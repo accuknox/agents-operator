@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"time"
 
+	"github.com/antonmedv/expr"
 	"github.com/rs/zerolog/log"
 	"gopkg.in/yaml.v2"
 	appsv1 "k8s.io/api/apps/v1"
@@ -26,12 +27,12 @@ type AgentConfig struct {
 			Resource []struct {
 				Type    string `yaml:"type"`
 				Request []struct {
-					Multiplier int `yaml:"multiplier"`
-					UpperBound int `yaml:"upper-bound"`
+					Value      string `yaml:"value"`
+					UpperBound int    `yaml:"upper-bound"`
 				} `yaml:"request"`
 				Limit []struct {
-					Multiplier int `yaml:"multiplier"`
-					UpperBound int `yaml:"upper-bound"`
+					Value      string `yaml:"value"`
+					UpperBound int    `yaml:"upper-bound"`
 				} `yaml:"limit"`
 			} `yaml:"resource"`
 		} `yaml:"container"`
@@ -46,6 +47,29 @@ func numberOfNodes(clientset *kubernetes.Clientset) int {
 
 	nodesCount := len(nodes.Items)
 	return nodesCount
+}
+
+func exprEval(valueExpr string, nodesCount int) int {
+
+	env := map[string]interface{}{
+		"n": nodesCount,
+	}
+
+	compiledExpr, err := expr.Compile(valueExpr, expr.Env(env))
+	if err != nil {
+		log.Error().Msg(err.Error())
+	}
+
+	value, err := expr.Run(compiledExpr, env)
+	if err != nil {
+		log.Error().Msg(err.Error())
+	}
+
+	valueInt, ok := value.(int)
+	if !ok {
+		log.Error().Msg(err.Error())
+	}
+	return valueInt
 }
 
 func updateAgentResource(clientset *kubernetes.Clientset, configMap *v1.ConfigMap, index, nodesCount int, agentName, namespace string) error {
@@ -64,9 +88,9 @@ func updateAgentResource(clientset *kubernetes.Clientset, configMap *v1.ConfigMa
 		}
 	}
 
-	cpuReqMultiplier := conf.Agent[index].Container[0].Resource[cpuIndex].Request[0].Multiplier
-	cpuLimitMultiplier := conf.Agent[index].Container[0].Resource[cpuIndex].Limit[0].Multiplier
 	cpuLimitUB := conf.Agent[index].Container[0].Resource[cpuIndex].Limit[1].UpperBound
+	cpuReqValueExpr := conf.Agent[index].Container[0].Resource[cpuIndex].Request[0].Value
+	cpuLimitValueExpr := conf.Agent[index].Container[0].Resource[cpuIndex].Limit[0].Value
 
 	// access memory field values
 	var memIndex int
@@ -76,19 +100,22 @@ func updateAgentResource(clientset *kubernetes.Clientset, configMap *v1.ConfigMa
 			break
 		}
 	}
-	memReqMultiplier := conf.Agent[index].Container[0].Resource[memIndex].Request[0].Multiplier
-	memLimitMultiplier := conf.Agent[index].Container[0].Resource[memIndex].Limit[0].Multiplier
-	memLimitUB := conf.Agent[index].Container[0].Resource[memIndex].Limit[1].UpperBound
 
-	cpuReq := int64(nodesCount * cpuReqMultiplier)
-	cpuLimit := int64(nodesCount * cpuLimitMultiplier)
+	memLimitUB := conf.Agent[index].Container[0].Resource[memIndex].Limit[1].UpperBound
+	memReqValueExpr := conf.Agent[index].Container[0].Resource[memIndex].Request[0].Value
+	memLimitValueExpr := conf.Agent[index].Container[0].Resource[memIndex].Limit[0].Value
+
+	cpuReq := int64(exprEval(cpuReqValueExpr, nodesCount))
+	cpuLimit := int64(exprEval(cpuLimitValueExpr, nodesCount))
+
 	if cpuLimit > int64(cpuLimitUB) {
 		cpuLimit = int64(cpuLimitUB)
 	}
 
 	mebibyte := 1048576
-	memReq := int64(nodesCount * memReqMultiplier * mebibyte) // value in Mi
-	memLimit := int64(nodesCount * memLimitMultiplier * mebibyte)
+	memReq := int64(exprEval(memReqValueExpr, nodesCount) * mebibyte) // value in Mi
+	memLimit := int64(exprEval(memLimitValueExpr, nodesCount) * mebibyte)
+
 	if memReq > int64(memLimitUB*mebibyte) {
 		memReq = int64(memLimitUB * mebibyte)
 	}
