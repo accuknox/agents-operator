@@ -43,6 +43,7 @@ func numberOfNodes(clientset *kubernetes.Clientset) int {
 	nodes, err := clientset.CoreV1().Nodes().List(context.TODO(), metav1.ListOptions{})
 	if err != nil {
 		log.Error().Msgf("Failed to list nodes: %v", err)
+		return -1
 	}
 
 	nodesCount := len(nodes.Items)
@@ -58,11 +59,13 @@ func exprEval(valueExpr string, nodesCount int) int {
 	compiledExpr, err := expr.Compile(valueExpr, expr.Env(env))
 	if err != nil {
 		log.Error().Msg(err.Error())
+		return -1
 	}
 
 	value, err := expr.Run(compiledExpr, env)
 	if err != nil {
 		log.Error().Msg(err.Error())
+		return -1
 	}
 
 	valueInt, ok := value.(int)
@@ -77,6 +80,7 @@ func updateAgentResource(clientset *kubernetes.Clientset, configMap *v1.ConfigMa
 	err := yaml.Unmarshal([]byte(configMap.Data["conf.yaml"]), &conf)
 	if err != nil {
 		log.Error().Msg(err.Error())
+		return err
 	}
 
 	// access the cpu field values
@@ -106,15 +110,31 @@ func updateAgentResource(clientset *kubernetes.Clientset, configMap *v1.ConfigMa
 	memLimitValueExpr := conf.Agent[index].Container[0].Resource[memIndex].Limit[0].Value
 
 	cpuReq := int64(exprEval(cpuReqValueExpr, nodesCount))
+	if cpuReq <= 0 {
+		return err
+	}
 	cpuLimit := int64(exprEval(cpuLimitValueExpr, nodesCount))
+	if cpuLimit <= 0 {
+		return err
+	}
 
+	if cpuReq > int64(cpuLimitUB) {
+		cpuReq = int64(cpuLimitUB)
+	}
 	if cpuLimit > int64(cpuLimitUB) {
 		cpuLimit = int64(cpuLimitUB)
 	}
 
 	mebibyte := 1048576
 	memReq := int64(exprEval(memReqValueExpr, nodesCount) * mebibyte) // value in Mi
+	if memReq <= 0 {
+		return err
+	}
+
 	memLimit := int64(exprEval(memLimitValueExpr, nodesCount) * mebibyte)
+	if memLimit <= 0 {
+		return err
+	}
 
 	if memReq > int64(memLimitUB*mebibyte) {
 		memReq = int64(memLimitUB * mebibyte)
@@ -126,7 +146,7 @@ func updateAgentResource(clientset *kubernetes.Clientset, configMap *v1.ConfigMa
 	deployment, err := clientset.AppsV1().Deployments(namespace).Get(context.TODO(), agentName, metav1.GetOptions{})
 	if err != nil {
 		log.Error().Msg(err.Error())
-		return nil
+		return err
 	}
 
 	deployment.Spec.Template.Spec.Containers[0].Resources.Requests = v1.ResourceList{
@@ -142,7 +162,7 @@ func updateAgentResource(clientset *kubernetes.Clientset, configMap *v1.ConfigMa
 	originalDeployment, err := clientset.AppsV1().Deployments(namespace).Get(context.TODO(), agentName, metav1.GetOptions{})
 	if err != nil {
 		log.Error().Msg(err.Error())
-		return nil
+		return err
 	}
 
 	// Get the original deployment as raw bytes
@@ -166,9 +186,10 @@ func updateAgentResource(clientset *kubernetes.Clientset, configMap *v1.ConfigMa
 	_, err = clientset.AppsV1().Deployments(namespace).Patch(context.Background(), agentName, types.StrategicMergePatchType, []byte(patch), metav1.PatchOptions{})
 	if err != nil {
 		log.Error().Msgf("Error patching pod: %v", err)
+		return err
 	}
 
-	return nil
+	return err
 }
 
 // watch "agents-operator-config" configMap for changes
@@ -200,6 +221,7 @@ func watchConfigMap(clientset *kubernetes.Clientset, namespace, agentConfig stri
 			err = yaml.Unmarshal([]byte(configMap.Data["conf.yaml"]), &conf)
 			if err != nil {
 				log.Error().Msg(err.Error())
+				return
 			}
 
 			for i, resource := range conf.Agent {
@@ -256,6 +278,9 @@ func main() {
 	clientset := kubernetes.NewForConfigOrDie(config)
 
 	nodesCount := numberOfNodes(clientset)
+	if nodesCount <= 0 {
+		return
+	}
 
 	namespace := "accuknox-agents"
 	agentConfig := "agents-operator-config"
@@ -275,6 +300,7 @@ func main() {
 	err = yaml.Unmarshal([]byte(configMap.Data["conf.yaml"]), &conf)
 	if err != nil {
 		log.Error().Msg(err.Error())
+		return
 	}
 
 	// Create shared informer factory
