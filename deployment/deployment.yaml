@@ -11,69 +11,69 @@ data:
         - resource:
           - type: cpu
             request:
-              - multiplier: 50
-              - upper-bound: 200000
+              - value: (n/5 + 1)*50
+              - upper-bound: 5000
             limit:
-              - multiplier: 100
-              - upper-bound: 200000
+              - value: (n/5 + 1)*100
+              - upper-bound: 10000
           - type: memory
             request:
-              - multiplier: 100
-              - upper-bound: 1000
+              - value: (n/5 + 1)*100
+              - upper-bound: 10000
             limit:
-              - multiplier: 200
-              - upper-bound: 2000
+              - value: (n/5 + 1)*200
+              - upper-bound: 20000
       - name: shared-informer-agent
         container: 
         - resource:
           - type: cpu
             request:
-              - multiplier: 200
-              - upper-bound: 200000
+              - value: (n/5 + 1)*20
+              - upper-bound: 2000
             limit:
-              - multiplier: 200
-              - upper-bound: 200000
+              - value: (n/5 + 1)*50
+              - upper-bound: 5000
           - type: memory
             request:
-              - multiplier: 10
-              - upper-bound: 500
+              - value: (n/5 + 1)*50
+              - upper-bound: 5000
             limit:
-              - multiplier: 50
-              - upper-bound: 500
+              - value: (n/5 + 1)*100
+              - upper-bound: 10000
       - name: policy-enforcement-agent
         container: 
         - resource:
           - type: cpu
             request:
-              - multiplier: 300
-              - upper-bound: 200000
+              - value: (n/5 + 1)*10
+              - upper-bound: 1000
             limit:
-              - multiplier: 300
-              - upper-bound: 200000
+              - value: (n/5 + 1)*30
+              - upper-bound: 3000
           - type: memory
             request:
-              - multiplier: 10
-              - upper-bound: 500
+              - value: (n/5 + 1)*20
+              - upper-bound: 2000
             limit:
-              - multiplier: 50
-              - upper-bound: 500
+              - value: (n/5 + 1)*50
+              - upper-bound: 5000
       - name: discovery-engine
         container: 
         - resource:
           - type: cpu
             request:
-              - multiplier: 400
-              - upper-bound: 200000
+              - value: (n/5 + 1)*100
+              - upper-bound: 10000
             limit:
-              - multiplier: 400
-              - upper-bound: 200000
+              - value: (n/5 + 1)*200
+              - upper-bound: 20000
           - type: memory
             request:
-              - multiplier: 100
-              - upper-bound: 2000
+              - value: (n/5 + 1)*100
+              - upper-bound: 10000
             limit:
-              - multiplier: 100
-              - upper-bound: 2000
+              - value: (n/5 + 1)*200
+              - upper-bound: 20000
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -97,12 +97,12 @@ spec:
         imagePullPolicy: Always
         name: agents-operator
         resources:
-          limits:
-            cpu: 100m
-            memory: 100Mi
           requests:
             cpu: 10m
             memory: 50Mi
+          limits:
+            cpu: 100m
+            memory: 100Mi
         volumeMounts:
           - mountPath: /conf
             name: config-volume
