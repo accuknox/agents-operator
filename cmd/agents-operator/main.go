@@ -138,6 +138,9 @@ func updateAgentResource(clientset *kubernetes.Clientset, configMap *v1.ConfigMa
 	if cpuLimit > int64(cpuLimitUB) {
 		cpuLimit = int64(cpuLimitUB)
 	}
+	if cpuReq > cpuLimit {
+		cpuReq = cpuLimit
+	}
 
 	mebibyte := 1048576
 	memReq := int64(exprEval(memReqValueExpr, nodesCount) * mebibyte) // value in Mi
@@ -155,6 +158,9 @@ func updateAgentResource(clientset *kubernetes.Clientset, configMap *v1.ConfigMa
 	}
 	if memLimit > int64(memLimitUB*mebibyte) {
 		memLimit = int64(memLimitUB * mebibyte)
+	}
+	if memReq > memLimit {
+		memReq = memLimit
 	}
 
 	deployment, err := clientset.AppsV1().Deployments(globalns).Get(context.TODO(), agentName, metav1.GetOptions{})
@@ -235,6 +241,7 @@ func watchConfigMap(clientset *kubernetes.Clientset, nodesCount int) {
 		case <-time.After(time.Minute):
 			log.Info().Msgf("Watching the agents-operator configMap changes")
 		}
+		time.Sleep(200 * time.Millisecond)
 	}
 }
 
@@ -293,7 +300,7 @@ func main() {
 	nodeInformer := factory.Core().V1().Nodes().Informer()
 
 	// Set up an event handler for when nodes are added or deleted
-	nodeInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{
+	_, _ = nodeInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{
 		AddFunc: func(obj interface{}) {
 			mutex.Lock()
 			nodesCount = nodesCount + 1
@@ -314,7 +321,7 @@ func main() {
 	deploymentInformer := dfactory.Apps().V1().Deployments().Informer()
 
 	// Set up an event handler for when deployments are added or deleted
-	deploymentInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{
+	_, _ = deploymentInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{
 		AddFunc: func(obj interface{}) {
 			// Print the name of the newly added deployment
 			deployment, ok := obj.(*appsv1.Deployment)
