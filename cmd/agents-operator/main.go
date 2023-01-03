@@ -305,7 +305,7 @@ func main() {
 	deploymentInformer := dfactory.Apps().V1().Deployments().Informer()
 
 	// Set up an event handler for when deployments are added or deleted
-	_, err = deploymentInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{
+	_, _ = deploymentInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{
 		AddFunc: func(obj interface{}) {
 			// Print the name of the newly added deployment
 			deployment, ok := obj.(*appsv1.Deployment)
@@ -354,7 +354,7 @@ func main() {
 	nodeInformer := factory.Core().V1().Nodes().Informer()
 
 	// Set up an event handler for when nodes are added or deleted
-	_, err = nodeInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{
+	_, _ = nodeInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{
 		AddFunc: func(obj interface{}) {
 			nodesCount = numberOfNodes(clientset)
 			log.Info().Msgf("add node: nodesCount = %d\n", nodesCount)
