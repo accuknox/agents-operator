@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"sync"
 	"time"
 
 	"github.com/antonmedv/expr"
@@ -14,6 +15,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/strategicpatch"
+	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/cache"
@@ -41,18 +43,6 @@ type AgentConfig struct {
 
 var globalns = "accuknox-agents"
 var agentConfig = "agents-operator-config"
-
-func numberOfNodes(clientset *kubernetes.Clientset) int {
-	nodes, err := clientset.CoreV1().Nodes().List(context.TODO(), metav1.ListOptions{})
-	if err != nil {
-		log.Error().Msgf("Failed to list nodes: %v", err)
-		return -1
-	}
-
-	nodesCount := len(nodes.Items)
-	log.Info().Msgf("nodes count:%d", nodesCount)
-	return nodesCount
-}
 
 func exprEval(valueExpr string, nodesCount int) int {
 
@@ -210,14 +200,13 @@ func updateAgentResource(clientset *kubernetes.Clientset, configMap *v1.ConfigMa
 		return nil
 	}
 
-	log.Info().Msgf("patching %s: CPU[req=%d,limit=%d] MEM[req=%d,limit=%d]",
+	log.Info().Msgf("Patching %s: CPU[req=%d, limit=%d] MEM[req=%d,limit=%d]",
 		conf.Agent[index].Name, cpuReq, cpuLimit, memReq, memLimit)
 	_, err = clientset.AppsV1().Deployments(globalns).Patch(context.Background(), agentName, types.StrategicMergePatchType, []byte(patch), metav1.PatchOptions{})
 	if err != nil {
 		log.Error().Msgf("Error patching pod: %v", err)
 		return err
 	}
-
 	return err
 }
 
@@ -266,14 +255,14 @@ func deploymentReady(clientset *kubernetes.Clientset, globalns string) {
 				break
 			}
 		}
-
 		if allReady {
 			break
 		}
-
 		time.Sleep(2 * time.Second)
 	}
 }
+
+var mutex sync.Mutex
 
 func main() {
 	// get the local kube config
@@ -288,32 +277,50 @@ func main() {
 	// create the clientset
 	clientset := kubernetes.NewForConfigOrDie(config)
 
-	nodesCount := numberOfNodes(clientset)
-	if nodesCount <= 0 {
-		return
-	}
+	nodesCount := 0
 
-	// Watcher to look for ConfigMap changes
-	go watchConfigMap(clientset, nodesCount)
+	// Node informer
+
+	// Start the informer
+	stopCh := make(chan struct{})
 
 	// Create shared informer factory
 	factory := informers.NewSharedInformerFactory(clientset, time.Second*5)
 
 	dfactory := informers.NewSharedInformerFactoryWithOptions(clientset, time.Second*30, informers.WithNamespace(globalns))
 
+	// Retrieve the node informer
+	nodeInformer := factory.Core().V1().Nodes().Informer()
+
+	// Set up an event handler for when nodes are added or deleted
+	nodeInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{
+		AddFunc: func(obj interface{}) {
+			mutex.Lock()
+			nodesCount = nodesCount + 1
+			mutex.Unlock()
+			log.Info().Msgf("add node: nodesCount = %d", nodesCount)
+			updateAllAgents(clientset, nodesCount)
+		},
+		DeleteFunc: func(obj interface{}) {
+			mutex.Lock()
+			nodesCount = nodesCount - 1
+			mutex.Unlock()
+			log.Info().Msgf("del node: nodesCount = %d", nodesCount)
+			updateAllAgents(clientset, nodesCount)
+		},
+	})
+
 	// Retrieve the deployment informer
 	deploymentInformer := dfactory.Apps().V1().Deployments().Informer()
 
 	// Set up an event handler for when deployments are added or deleted
-	_, _ = deploymentInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{
+	deploymentInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{
 		AddFunc: func(obj interface{}) {
 			// Print the name of the newly added deployment
 			deployment, ok := obj.(*appsv1.Deployment)
 			if ok {
 				log.Info().Msgf("New deployment detected: %s", deployment.Name)
-
 				deploymentReady(clientset, globalns)
-
 				updateAllAgents(clientset, nodesCount)
 			}
 		},
@@ -343,30 +350,15 @@ func main() {
 		},
 	})
 
-	// Start the informer
-	stopCh := make(chan struct{})
-	defer close(stopCh)
+	// Watcher to look for ConfigMap changes
+	go watchConfigMap(clientset, nodesCount)
 
 	// Run the informer with the stop channel
-	deploymentInformer.Run(stopCh)
-
-	// Retrieve the node informer
-	nodeInformer := factory.Core().V1().Nodes().Informer()
-
-	// Set up an event handler for when nodes are added or deleted
-	_, _ = nodeInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{
-		AddFunc: func(obj interface{}) {
-			nodesCount = numberOfNodes(clientset)
-			log.Info().Msgf("add node: nodesCount = %d\n", nodesCount)
-			updateAllAgents(clientset, nodesCount)
-		},
-		DeleteFunc: func(obj interface{}) {
-			nodesCount = numberOfNodes(clientset)
-			log.Info().Msgf("del node: nodesCount = %d\n", nodesCount)
-			updateAllAgents(clientset, nodesCount)
-		},
-	})
-
+	go nodeInformer.Run(stopCh)
 	// Run the informer with the stop channel
-	nodeInformer.Run(stopCh)
+	go deploymentInformer.Run(stopCh)
+
+	wait.Until(func() {}, time.Second, stopCh)
+	// Close the stop channel to signal the informers to stop
+	close(stopCh)
 }
