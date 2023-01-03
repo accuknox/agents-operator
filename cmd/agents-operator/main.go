@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"sync"
 	"time"
 
@@ -108,59 +109,57 @@ func updateAllAgents(clientset *kubernetes.Clientset, nodesCount int) {
 	}
 }
 
+func getReqLimit(restype string, conf AgentConfig, index int, nodesCount int) (int64, int64) {
+	idx := getIndexForType(&conf, index, restype)
+	if idx < 0 {
+		log.Error().Msgf("could not getIndexForType")
+		return -1, -1
+	}
+	mebibyte := 1
+	if restype == "memory" {
+		mebibyte = 1048576
+	}
+
+	limitUB := conf.Agent[index].Container[0].Resource[idx].Limit[1].UpperBound
+	reqValueExpr := conf.Agent[index].Container[0].Resource[idx].Request[0].Value
+	limitValueExpr := conf.Agent[index].Container[0].Resource[idx].Limit[0].Value
+
+	req := int64(exprEval(reqValueExpr, nodesCount) * mebibyte)
+	if req <= 0 {
+		return -1, -1
+	}
+	limit := int64(exprEval(limitValueExpr, nodesCount) * mebibyte)
+	if limit <= 0 {
+		return -1, -1
+	}
+
+	if req > int64(limitUB*mebibyte) {
+		req = int64(limitUB * mebibyte)
+	}
+	if limit > int64(limitUB*mebibyte) {
+		limit = int64(limitUB * mebibyte)
+	}
+	if req > limit {
+		req = limit
+	}
+	return req, limit
+}
+
 func updateAgentResource(clientset *kubernetes.Clientset, configMap *v1.ConfigMap, conf AgentConfig, index int, nodesCount int, agentName string) error {
 	var err error
 
-	// access the cpu field values
-	cpuIndex := getIndexForType(&conf, index, "cpu")
-	memIndex := getIndexForType(&conf, index, "memory")
-
-	cpuLimitUB := conf.Agent[index].Container[0].Resource[cpuIndex].Limit[1].UpperBound
-	cpuReqValueExpr := conf.Agent[index].Container[0].Resource[cpuIndex].Request[0].Value
-	cpuLimitValueExpr := conf.Agent[index].Container[0].Resource[cpuIndex].Limit[0].Value
-
-	memLimitUB := conf.Agent[index].Container[0].Resource[memIndex].Limit[1].UpperBound
-	memReqValueExpr := conf.Agent[index].Container[0].Resource[memIndex].Request[0].Value
-	memLimitValueExpr := conf.Agent[index].Container[0].Resource[memIndex].Limit[0].Value
-
-	cpuReq := int64(exprEval(cpuReqValueExpr, nodesCount))
-	if cpuReq <= 0 {
-		return err
-	}
-	cpuLimit := int64(exprEval(cpuLimitValueExpr, nodesCount))
-	if cpuLimit <= 0 {
+	cpuReq, cpuLimit := getReqLimit("cpu", conf, index, nodesCount)
+	if cpuReq <= 0 || cpuLimit <= 0 {
+		err = errors.New("could not get req limit for cpu")
+		log.Error().Msgf("err=%v", err)
 		return err
 	}
 
-	if cpuReq > int64(cpuLimitUB) {
-		cpuReq = int64(cpuLimitUB)
-	}
-	if cpuLimit > int64(cpuLimitUB) {
-		cpuLimit = int64(cpuLimitUB)
-	}
-	if cpuReq > cpuLimit {
-		cpuReq = cpuLimit
-	}
-
-	mebibyte := 1048576
-	memReq := int64(exprEval(memReqValueExpr, nodesCount) * mebibyte) // value in Mi
-	if memReq <= 0 {
+	memReq, memLimit := getReqLimit("memory", conf, index, nodesCount)
+	if memReq <= 0 || memLimit <= 0 {
+		err = errors.New("could not get req limit for mem")
+		log.Error().Msgf("err=%v", err)
 		return err
-	}
-
-	memLimit := int64(exprEval(memLimitValueExpr, nodesCount) * mebibyte)
-	if memLimit <= 0 {
-		return err
-	}
-
-	if memReq > int64(memLimitUB*mebibyte) {
-		memReq = int64(memLimitUB * mebibyte)
-	}
-	if memLimit > int64(memLimitUB*mebibyte) {
-		memLimit = int64(memLimitUB * mebibyte)
-	}
-	if memReq > memLimit {
-		memReq = memLimit
 	}
 
 	deployment, err := clientset.AppsV1().Deployments(globalns).Get(context.TODO(), agentName, metav1.GetOptions{})
