@@ -12,5 +12,5 @@ Accuknox Agents manage synchronization to the Accuknox SaaS cluster. The agents 
 ## Deploying
 
 ```
-kubectl apply -f deployment/deployment.yaml
+kubectl apply -f https://raw.githubusercontent.com/accuknox/agents-operator/main/deployment/deployment.yaml
 ```
