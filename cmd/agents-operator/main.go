@@ -39,6 +39,9 @@ type AgentConfig struct {
 	} `yaml:"agent"`
 }
 
+var globalns = "accuknox-agents"
+var agentConfig = "agents-operator-config"
+
 func numberOfNodes(clientset *kubernetes.Clientset) int {
 	nodes, err := clientset.CoreV1().Nodes().List(context.TODO(), metav1.ListOptions{})
 	if err != nil {
@@ -47,6 +50,7 @@ func numberOfNodes(clientset *kubernetes.Clientset) int {
 	}
 
 	nodesCount := len(nodes.Items)
+	log.Info().Msgf("nodes count:%d", nodesCount)
 	return nodesCount
 }
 
@@ -75,35 +79,55 @@ func exprEval(valueExpr string, nodesCount int) int {
 	return valueInt
 }
 
-func updateAgentResource(clientset *kubernetes.Clientset, configMap *v1.ConfigMap, index, nodesCount int, agentName, namespace string) error {
-	var conf AgentConfig
-	err := yaml.Unmarshal([]byte(configMap.Data["conf.yaml"]), &conf)
-	if err != nil {
-		log.Error().Msg(err.Error())
-		return err
-	}
-
-	// access the cpu field values
-	var cpuIndex int
-	for i, resource := range conf.Agent[1].Container[0].Resource {
-		if resource.Type == "cpu" {
-			cpuIndex = i
-			break
+func getIndexForType(conf *AgentConfig, index int, restype string) int {
+	for i, resource := range conf.Agent[index].Container[0].Resource {
+		if resource.Type == restype {
+			return i
 		}
 	}
+	return -1
+}
+
+var configMapUpdated = true
+var configMap *v1.ConfigMap
+
+func updateAllAgents(clientset *kubernetes.Clientset, nodesCount int) {
+	var err error
+	if configMapUpdated {
+		configMap, err = clientset.CoreV1().ConfigMaps(globalns).Get(context.TODO(), agentConfig, metav1.GetOptions{})
+		if err != nil {
+			log.Error().Msg(err.Error())
+			return
+		}
+		configMapUpdated = false
+	}
+
+	var conf AgentConfig
+	err = yaml.Unmarshal([]byte(configMap.Data["conf.yaml"]), &conf)
+	if err != nil {
+		log.Error().Msg(err.Error())
+		return
+	}
+
+	for i, resource := range conf.Agent {
+		err = updateAgentResource(clientset, configMap, conf, i, nodesCount, resource.Name)
+		if err != nil {
+			log.Error().Msg(err.Error())
+			return
+		}
+	}
+}
+
+func updateAgentResource(clientset *kubernetes.Clientset, configMap *v1.ConfigMap, conf AgentConfig, index int, nodesCount int, agentName string) error {
+	var err error
+
+	// access the cpu field values
+	cpuIndex := getIndexForType(&conf, index, "cpu")
+	memIndex := getIndexForType(&conf, index, "memory")
 
 	cpuLimitUB := conf.Agent[index].Container[0].Resource[cpuIndex].Limit[1].UpperBound
 	cpuReqValueExpr := conf.Agent[index].Container[0].Resource[cpuIndex].Request[0].Value
 	cpuLimitValueExpr := conf.Agent[index].Container[0].Resource[cpuIndex].Limit[0].Value
-
-	// access memory field values
-	var memIndex int
-	for i, resource := range conf.Agent[1].Container[0].Resource {
-		if resource.Type == "memory" {
-			memIndex = i
-			break
-		}
-	}
 
 	memLimitUB := conf.Agent[index].Container[0].Resource[memIndex].Limit[1].UpperBound
 	memReqValueExpr := conf.Agent[index].Container[0].Resource[memIndex].Request[0].Value
@@ -143,7 +167,7 @@ func updateAgentResource(clientset *kubernetes.Clientset, configMap *v1.ConfigMa
 		memLimit = int64(memLimitUB * mebibyte)
 	}
 
-	deployment, err := clientset.AppsV1().Deployments(namespace).Get(context.TODO(), agentName, metav1.GetOptions{})
+	deployment, err := clientset.AppsV1().Deployments(globalns).Get(context.TODO(), agentName, metav1.GetOptions{})
 	if err != nil {
 		log.Error().Msg(err.Error())
 		return err
@@ -159,7 +183,7 @@ func updateAgentResource(clientset *kubernetes.Clientset, configMap *v1.ConfigMa
 		v1.ResourceMemory: *resource.NewQuantity(memLimit, resource.BinarySI),
 	}
 
-	originalDeployment, err := clientset.AppsV1().Deployments(namespace).Get(context.TODO(), agentName, metav1.GetOptions{})
+	originalDeployment, err := clientset.AppsV1().Deployments(globalns).Get(context.TODO(), agentName, metav1.GetOptions{})
 	if err != nil {
 		log.Error().Msg(err.Error())
 		return err
@@ -182,8 +206,13 @@ func updateAgentResource(clientset *kubernetes.Clientset, configMap *v1.ConfigMa
 	if err != nil {
 		return err
 	}
+	if len(patch) <= 2 {
+		return nil
+	}
 
-	_, err = clientset.AppsV1().Deployments(namespace).Patch(context.Background(), agentName, types.StrategicMergePatchType, []byte(patch), metav1.PatchOptions{})
+	log.Info().Msgf("patching %s: CPU[req=%d,limit=%d] MEM[req=%d,limit=%d]",
+		conf.Agent[index].Name, cpuReq, cpuLimit, memReq, memLimit)
+	_, err = clientset.AppsV1().Deployments(globalns).Patch(context.Background(), agentName, types.StrategicMergePatchType, []byte(patch), metav1.PatchOptions{})
 	if err != nil {
 		log.Error().Msgf("Error patching pod: %v", err)
 		return err
@@ -193,14 +222,14 @@ func updateAgentResource(clientset *kubernetes.Clientset, configMap *v1.ConfigMa
 }
 
 // watch "agents-operator-config" configMap for changes
-func watchConfigMap(clientset *kubernetes.Clientset, namespace, agentConfig string, nodesCount int) {
+func watchConfigMap(clientset *kubernetes.Clientset, nodesCount int) {
 	// Create a new context
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	configMapName := "metadata.name=" + agentConfig
 	// Watch for changes to the configmap
-	watcher, err := clientset.CoreV1().ConfigMaps(namespace).Watch(ctx, metav1.ListOptions{FieldSelector: configMapName})
+	watcher, err := clientset.CoreV1().ConfigMaps(globalns).Watch(ctx, metav1.ListOptions{FieldSelector: configMapName})
 	if err != nil {
 		log.Error().Msg(err.Error())
 		return
@@ -211,26 +240,8 @@ func watchConfigMap(clientset *kubernetes.Clientset, namespace, agentConfig stri
 	for {
 		select {
 		case <-watcher.ResultChan():
-			configMap, err := clientset.CoreV1().ConfigMaps(namespace).Get(context.TODO(), agentConfig, metav1.GetOptions{})
-			if err != nil {
-				log.Error().Msg(err.Error())
-				return
-			}
-
-			var conf AgentConfig
-			err = yaml.Unmarshal([]byte(configMap.Data["conf.yaml"]), &conf)
-			if err != nil {
-				log.Error().Msg(err.Error())
-				return
-			}
-
-			for i, resource := range conf.Agent {
-				err = updateAgentResource(clientset, configMap, i, nodesCount, resource.Name, namespace)
-				if err != nil {
-					log.Error().Msg(err.Error())
-					return
-				}
-			}
+			configMapUpdated = true
+			updateAllAgents(clientset, nodesCount)
 
 		case <-time.After(time.Minute):
 			log.Info().Msgf("Watching the agents-operator configMap changes")
@@ -239,10 +250,10 @@ func watchConfigMap(clientset *kubernetes.Clientset, namespace, agentConfig stri
 }
 
 // wait for the deployment to be ready
-func deploymentReady(clientset *kubernetes.Clientset, namespace string) {
+func deploymentReady(clientset *kubernetes.Clientset, globalns string) {
 	// Loop until all deployments are ready
 	for {
-		deployments, err := clientset.AppsV1().Deployments(namespace).List(context.TODO(), metav1.ListOptions{})
+		deployments, err := clientset.AppsV1().Deployments(globalns).List(context.TODO(), metav1.ListOptions{})
 		if err != nil {
 			log.Error().Msgf("Deployment not found: %v", err)
 			return
@@ -282,31 +293,13 @@ func main() {
 		return
 	}
 
-	namespace := "accuknox-agents"
-	agentConfig := "agents-operator-config"
-	var name string
-
 	// Watcher to look for ConfigMap changes
-	go watchConfigMap(clientset, namespace, agentConfig, nodesCount)
-
-	// Get the ConfigMap
-	configMap, err := clientset.CoreV1().ConfigMaps(namespace).Get(context.TODO(), agentConfig, metav1.GetOptions{})
-	if err != nil {
-		log.Error().Msg(err.Error())
-		return
-	}
-
-	var conf AgentConfig
-	err = yaml.Unmarshal([]byte(configMap.Data["conf.yaml"]), &conf)
-	if err != nil {
-		log.Error().Msg(err.Error())
-		return
-	}
+	go watchConfigMap(clientset, nodesCount)
 
 	// Create shared informer factory
 	factory := informers.NewSharedInformerFactory(clientset, time.Second*5)
 
-	dfactory := informers.NewSharedInformerFactoryWithOptions(clientset, time.Second*30, informers.WithNamespace(namespace))
+	dfactory := informers.NewSharedInformerFactoryWithOptions(clientset, time.Second*30, informers.WithNamespace(globalns))
 
 	// Retrieve the deployment informer
 	deploymentInformer := dfactory.Apps().V1().Deployments().Informer()
@@ -319,16 +312,9 @@ func main() {
 			if ok {
 				log.Info().Msgf("New deployment detected: %s", deployment.Name)
 
-				deploymentReady(clientset, namespace)
+				deploymentReady(clientset, globalns)
 
-				for i, resource := range conf.Agent {
-					name = resource.Name
-					err = updateAgentResource(clientset, configMap, i, nodesCount, name, namespace)
-					if err != nil {
-						log.Error().Msg(err.Error())
-						return
-					}
-				}
+				updateAllAgents(clientset, nodesCount)
 			}
 		},
 		UpdateFunc: func(oldObj, newObj interface{}) {
@@ -344,15 +330,8 @@ func main() {
 			// Check if the deployment has been updated and if it is now ready
 			if oldDeployment.ResourceVersion != newDeployment.ResourceVersion && newDeployment.Status.ReadyReplicas == *newDeployment.Spec.Replicas {
 				log.Info().Msgf("Deployment updated: %s", newDeployment.Name)
-				deploymentReady(clientset, namespace)
-				for i, resource := range conf.Agent {
-					name = resource.Name
-					err = updateAgentResource(clientset, configMap, i, nodesCount, name, namespace)
-					if err != nil {
-						log.Error().Msg(err.Error())
-						return
-					}
-				}
+				deploymentReady(clientset, globalns)
+				updateAllAgents(clientset, nodesCount)
 			}
 		},
 		DeleteFunc: func(obj interface{}) {
@@ -377,24 +356,14 @@ func main() {
 	// Set up an event handler for when nodes are added or deleted
 	_, err = nodeInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{
 		AddFunc: func(obj interface{}) {
-			for i, resource := range conf.Agent {
-				name = resource.Name
-				err = updateAgentResource(clientset, configMap, i, nodesCount, name, namespace)
-				if err != nil {
-					log.Error().Msg(err.Error())
-					return
-				}
-			}
+			nodesCount = numberOfNodes(clientset)
+			log.Info().Msgf("add node: nodesCount = %d\n", nodesCount)
+			updateAllAgents(clientset, nodesCount)
 		},
 		DeleteFunc: func(obj interface{}) {
-			for i, resource := range conf.Agent {
-				name = resource.Name
-				err = updateAgentResource(clientset, configMap, i, nodesCount, name, namespace)
-				if err != nil {
-					log.Error().Msg(err.Error())
-					return
-				}
-			}
+			nodesCount = numberOfNodes(clientset)
+			log.Info().Msgf("del node: nodesCount = %d\n", nodesCount)
+			updateAllAgents(clientset, nodesCount)
 		},
 	})
 
