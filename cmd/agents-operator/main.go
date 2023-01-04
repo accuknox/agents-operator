@@ -3,13 +3,21 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"errors"
+
+	"github.com/pkg/errors"
+
+	"os"
 	"sync"
 	"time"
 
 	"github.com/antonmedv/expr"
 	"github.com/rs/zerolog/log"
 	"gopkg.in/yaml.v2"
+	"helm.sh/helm/v3/pkg/action"
+	"helm.sh/helm/v3/pkg/chart/loader"
+	"helm.sh/helm/v3/pkg/cli"
+	"helm.sh/helm/v3/pkg/cli/values"
+	"helm.sh/helm/v3/pkg/getter"
 	appsv1 "k8s.io/api/apps/v1"
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -21,6 +29,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/tools/clientcmd"
+	"k8s.io/helm/pkg/strvals"
 )
 
 type AgentConfig struct {
@@ -103,6 +112,7 @@ func updateAllAgents(clientset *kubernetes.Clientset, nodesCount int) {
 	for i, resource := range conf.Agent {
 		err = updateAgentResource(clientset, configMap, conf, i, nodesCount, resource.Name)
 		if err != nil {
+			log.Error().Msgf("Resource not updated: %s", resource.Name)
 			log.Error().Msg(err.Error())
 			return
 		}
@@ -268,10 +278,57 @@ func deploymentReady(clientset *kubernetes.Clientset, globalns string) {
 	}
 }
 
+var args = map[string]string{
+	"set": "serviceAccount.Namespace=accuknox-agents",
+}
+
+func installAgents(cfg *action.Configuration, settings *cli.EnvSettings, name, chartRef, ns string) {
+	client := action.NewInstall(cfg)
+
+	// Locate the chart in the chart repository.
+	chartPath, err := client.LocateChart(chartRef, settings)
+	if err != nil {
+		log.Error().Msgf("Error locating chart: %v", err)
+	}
+
+	// Create a chart object from the chartPath.
+	chart, err := loader.Load(chartPath)
+	if err != nil {
+		log.Error().Msgf("Error loading chart: %v", err)
+	}
+
+	client.Namespace = ns
+	client.ReleaseName = name
+
+	if name == "discovery-engine" {
+		p := getter.All(settings)
+		valueOpts := &values.Options{}
+		vals, err := valueOpts.MergeValues(p)
+		if err != nil {
+			log.Error().Msgf("Error in Mergevalues: %v", err.Error())
+		}
+		if err := strvals.ParseInto(args["set"], vals); err != nil {
+			log.Error().Msgf("failed parsing --set data: %v", err.Error())
+		}
+
+		_, err = client.Run(chart, vals)
+		if err != nil {
+			log.Error().Msg(err.Error())
+		}
+
+	} else {
+		_, err = client.Run(chart, nil)
+		if err != nil {
+			log.Error().Msg(err.Error())
+		}
+	}
+}
+
 var mutex sync.Mutex
 
 func main() {
 	// get the local kube config
+	os.Setenv("HELM_NAMESPACE", globalns)
 	rules := clientcmd.NewDefaultClientConfigLoadingRules()
 	kubeconfig := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(rules, &clientcmd.ConfigOverrides{})
 	config, err := kubeconfig.ClientConfig()
@@ -280,8 +337,44 @@ func main() {
 		return
 	}
 
+	// Install Agents
+	settings := cli.New()
+	// Set up the Helm action configuration.
+	cfg := new(action.Configuration)
+	if err := cfg.Init(settings.RESTClientGetter(), settings.Namespace(), os.Getenv("HELM_DRIVER"), log.Printf); err != nil {
+		log.Printf("%+v", err)
+		os.Exit(1)
+	}
+
 	// create the clientset
 	clientset := kubernetes.NewForConfigOrDie(config)
+
+	configMap, err := clientset.CoreV1().ConfigMaps(globalns).Get(context.TODO(), agentConfig, metav1.GetOptions{})
+	if err != nil {
+		log.Error().Msgf("Error getting config: %v", err.Error())
+	}
+
+	var data AgentConfig
+	repo := "accuknox-agents-dev/"
+	err = yaml.Unmarshal([]byte(configMap.Data["conf.yaml"]), &data)
+	if err != nil {
+		log.Error().Msgf("Error parsing config: %v", err.Error())
+	}
+
+	// Get the names of all the agents
+	for _, agent := range data.Agent {
+		_, err := clientset.AppsV1().Deployments(globalns).Get(context.TODO(), agent.Name, metav1.GetOptions{})
+		if err != nil {
+			var chartRef string
+			if agent.Name == "discovery-engine" {
+				chartRef = repo + agent.Name + "-agent-chart"
+			} else {
+				chartRef = repo + agent.Name + "-chart"
+			}
+			log.Info().Msgf("Agent not found, installing: %s", agent.Name)
+			installAgents(cfg, settings, agent.Name, chartRef, globalns)
+		}
+	}
 
 	nodesCount := 0
 
