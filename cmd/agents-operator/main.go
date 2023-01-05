@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 
 	"github.com/pkg/errors"
 
@@ -48,6 +49,7 @@ type AgentConfig struct {
 				} `yaml:"limit"`
 			} `yaml:"resource"`
 		} `yaml:"container"`
+		ChartName string `yaml:"chartname"`
 	} `yaml:"agent"`
 }
 
@@ -112,8 +114,7 @@ func updateAllAgents(clientset *kubernetes.Clientset, nodesCount int) {
 	for i, resource := range conf.Agent {
 		err = updateAgentResource(clientset, configMap, conf, i, nodesCount, resource.Name)
 		if err != nil {
-			log.Error().Msgf("Resource not updated: %s", resource.Name)
-			log.Error().Msg(err.Error())
+			log.Error().Msgf("Resource not updated: %v", err)
 			return
 		}
 	}
@@ -278,49 +279,69 @@ func deploymentReady(clientset *kubernetes.Clientset, globalns string) {
 	}
 }
 
-var args = map[string]string{
-	"set": "serviceAccount.Namespace=accuknox-agents",
+func getEnv(key string, defaultValue string) string {
+	value := os.Getenv(key)
+	if value == "" {
+		return defaultValue
+	}
+	return value
 }
 
-func installAgents(cfg *action.Configuration, settings *cli.EnvSettings, name, chartRef, ns string) {
+func installAgents(clientset *kubernetes.Clientset, cfg *action.Configuration, settings *cli.EnvSettings, conf AgentConfig, i int, name, chartRef, ns string) {
+	// Get the values of the environment variables.
+	tenantID := getEnv("tenant_id", "0")
+	clusterID := getEnv("cluster_id", "0")
+	clusterName := getEnv("cluster_name", "default")
+	workspaceID := getEnv("workspace_id", "0")
+
+	env := fmt.Sprint("tenant_id=", tenantID, " workspace_id=", workspaceID, " cluster_name=", clusterName, " cluster_id=", clusterID)
+	var args = map[string]string{
+		"set":    "serviceAccount.Namespace=" + globalns,
+		"setenv": env,
+	}
+
 	client := action.NewInstall(cfg)
 
 	// Locate the chart in the chart repository.
 	chartPath, err := client.LocateChart(chartRef, settings)
 	if err != nil {
 		log.Error().Msgf("Error locating chart: %v", err)
+		return
 	}
 
 	// Create a chart object from the chartPath.
 	chart, err := loader.Load(chartPath)
 	if err != nil {
 		log.Error().Msgf("Error loading chart: %v", err)
+		return
 	}
 
 	client.Namespace = ns
 	client.ReleaseName = name
 
-	if name == "discovery-engine" {
-		p := getter.All(settings)
-		valueOpts := &values.Options{}
-		vals, err := valueOpts.MergeValues(p)
-		if err != nil {
-			log.Error().Msgf("Error in Mergevalues: %v", err.Error())
-		}
-		if err := strvals.ParseInto(args["set"], vals); err != nil {
-			log.Error().Msgf("failed parsing --set data: %v", err.Error())
-		}
+	p := getter.All(settings)
+	valueOpts := &values.Options{}
+	vals, err := valueOpts.MergeValues(p)
+	if err != nil {
+		log.Error().Msgf("Error in Mergevalues: %v", err.Error())
+		return
+	}
+	if err := strvals.ParseInto(args["set"], vals); err != nil {
+		log.Error().Msgf("failed parsing --set data: %v", err.Error())
+		return
+	}
 
-		_, err = client.Run(chart, vals)
-		if err != nil {
-			log.Error().Msg(err.Error())
-		}
+	if err := strvals.ParseInto(args["setenv"], vals); err != nil {
+		log.Error().Msgf("failed parsing --set env data: %v", err.Error())
+		return
+	}
 
-	} else {
-		_, err = client.Run(chart, nil)
-		if err != nil {
-			log.Error().Msg(err.Error())
-		}
+	log.Info().Msgf("Env variables passed to helm: %s", vals)
+
+	_, err = client.Run(chart, vals)
+	if err != nil {
+		log.Error().Msg(err.Error())
+		return
 	}
 }
 
@@ -343,7 +364,7 @@ func main() {
 	cfg := new(action.Configuration)
 	if err := cfg.Init(settings.RESTClientGetter(), settings.Namespace(), os.Getenv("HELM_DRIVER"), log.Printf); err != nil {
 		log.Printf("%+v", err)
-		os.Exit(1)
+		return
 	}
 
 	// create the clientset
@@ -352,27 +373,24 @@ func main() {
 	configMap, err := clientset.CoreV1().ConfigMaps(globalns).Get(context.TODO(), agentConfig, metav1.GetOptions{})
 	if err != nil {
 		log.Error().Msgf("Error getting config: %v", err.Error())
+		return
 	}
 
-	var data AgentConfig
-	repo := "accuknox-agents-dev/"
-	err = yaml.Unmarshal([]byte(configMap.Data["conf.yaml"]), &data)
+	var conf AgentConfig
+	err = yaml.Unmarshal([]byte(configMap.Data["conf.yaml"]), &conf)
 	if err != nil {
 		log.Error().Msgf("Error parsing config: %v", err.Error())
+		return
 	}
 
 	// Get the names of all the agents
-	for _, agent := range data.Agent {
+	for i, agent := range conf.Agent {
 		_, err := clientset.AppsV1().Deployments(globalns).Get(context.TODO(), agent.Name, metav1.GetOptions{})
 		if err != nil {
-			var chartRef string
-			if agent.Name == "discovery-engine" {
-				chartRef = repo + agent.Name + "-agent-chart"
-			} else {
-				chartRef = repo + agent.Name + "-chart"
-			}
+			chartRef := agent.ChartName
+			log.Info().Msgf("Chartname: %s", chartRef)
 			log.Info().Msgf("Agent not found, installing: %s", agent.Name)
-			installAgents(cfg, settings, agent.Name, chartRef, globalns)
+			installAgents(clientset, cfg, settings, conf, i, agent.Name, chartRef, globalns)
 		}
 	}
 
