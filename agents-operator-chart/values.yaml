@@ -1,0 +1,65 @@
+
+image:
+  repository: accuknox/agents-operator
+  tag: latest
+  pullPolicy: Always
+
+
+labels:
+  app: agents-operator
+
+
+props: 
+  tenant_id: ""
+  workspace_id: ""
+  cluster_name: ""
+  cluster_id: ""
+  helm_repo: ""
+  helm_repo_url: ""
+  docker_repo_host: ""
+  docker_repo_username: ""
+  docker_repo_password: "" 
+
+
+serviceAccountName: agents-operator-sa
+
+
+clusterRole:
+  name: agents-operator-role
+  rules:
+  - apiGroups: [""] 
+    resources: [ "nodes", "configmaps"]
+    verbs: [ "get", "list", "watch"]
+  - apiGroups: ["*"] 
+    resources: [ "deployments"]
+    verbs: [ "get", "list", "watch", "patch"]
+
+
+clusterRoleBinding:
+  name: operator-rolebinding
+  clusterRoleName:  agents-operator-role
+  subjects:
+  - kind: ServiceAccount
+    name: agents-operator-sa
+    namespace: accuknox-agents
+
+
+resources:
+  requests:
+    cpu: 10m
+    memory: 50Mi
+  limits:
+    cpu: 100m
+    memory: 100Mi
+
+
+volumesMounts:
+- mountPath: /conf
+  name: config-volume
+  readOnly: true
+
+
+volumes:
+- name: config-volume
+  configMap:
+    name: agents-operator-config
