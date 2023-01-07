@@ -1,0 +1,31 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agents-operator
+  labels:
+    {{- toYaml .Values.labels | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      {{- toYaml .Values.labels | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- toYaml .Values.labels | nindent 8 }}
+    spec:
+      serviceAccountName: {{ .Values.serviceAccountName }}
+      containers:
+      - image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+        imagePullPolicy: {{ .Values.image.pullPolicy }}
+        name: agents-operator
+        env:
+        {{- range $key, $value  := .Values.props }}
+        - name: {{ $key }} 
+          value: {{ required (printf "value for %s is missing" $key) $value }}
+        {{- end }} 
+        resources:
+          {{- toYaml .Values.resources | nindent 10 }}
+        volumeMounts:
+        {{- toYaml .Values.volumesMounts | nindent 8  }}
+      volumes:
+      {{- toYaml .Values.volumes | nindent 6  }}
