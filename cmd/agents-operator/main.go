@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/antonmedv/expr"
-	helmclient "github.com/mittwald/go-helm-client"
 	"github.com/rs/zerolog/log"
 	"gopkg.in/yaml.v2"
 	"helm.sh/helm/v3/pkg/action"
@@ -20,7 +19,6 @@ import (
 	"helm.sh/helm/v3/pkg/cli"
 	"helm.sh/helm/v3/pkg/cli/values"
 	"helm.sh/helm/v3/pkg/getter"
-	"helm.sh/helm/v3/pkg/repo"
 	appsv1 "k8s.io/api/apps/v1"
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -361,69 +359,11 @@ func main() {
 		return
 	}
 
-	// Install Agents
 	settings := cli.New()
-	envVars := settings.EnvVars()
-	helmCache := envVars["HELM_REPOSITORY_CACHE"]
-	helmConfig := envVars["HELM_REPOSITORY_CONFIG"]
-
-	helmCacheFile, err := os.OpenFile(helmCache, os.O_CREATE|os.O_EXCL, 0644)
-	if err != nil {
-		// file exist, ignore and continue
-		log.Error().Msgf(err.Error())
-	}
-	defer helmCacheFile.Close()
-
-	helmConfigFile, err := os.OpenFile(helmConfig, os.O_CREATE|os.O_EXCL, 0644)
-	if err != nil {
-		// file exist, ignore and continue
-		log.Error().Msgf(err.Error())
-	}
-	defer helmConfigFile.Close()
-
-	err = os.MkdirAll(".cache/helm/repository", 0755)
-	if err != nil {
-		// Unable to create the directory
-		log.Error().Msgf(err.Error())
-		return
-	}
-
-	helmRepoFile, err := os.Create(".cache/helm/repository/accuknox-agents-dev-index.yaml")
-	if err != nil {
-		log.Error().Msgf(err.Error())
-		return
-	}
-	defer helmRepoFile.Close()
-
-	// get the helm env vals from the environment
-	opt := &helmclient.Options{
-		RepositoryCache:  helmCache,
-		RepositoryConfig: helmConfig,
-	}
-
-	helmClient, err := helmclient.New(opt)
-	if err != nil {
-		log.Error().Msgf(err.Error())
-		return
-	}
-
-	chartRepo := repo.Entry{
-		Name:               "accuknox-agents-dev",
-		URL:                "https://agents.accuknox.com/repository/accuknox-agents-dev",
-		Username:           "accuknox-agents-dev",
-		Password:           "h47Sh4taEs",
-		PassCredentialsAll: true,
-	}
-
-	if err := helmClient.AddOrUpdateChartRepo(chartRepo); err != nil {
-		log.Error().Msgf("Error adding/updating helm repo %v", err.Error())
-		return
-	}
-
 	// Set up the Helm action configuration.
 	cfg := new(action.Configuration)
-	if err := cfg.Init(settings.RESTClientGetter(), settings.Namespace(), os.Getenv("HELM_DRIVER"), log.Printf); err != nil {
-		log.Printf("%+v", err)
+	if err := cfg.Init(settings.RESTClientGetter(), settings.Namespace(), os.Getenv("HELM_DRIVER"), log.Error().Msgf); err != nil {
+		log.Error().Msgf("%+v", err)
 		return
 	}
 

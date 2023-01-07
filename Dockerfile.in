@@ -32,4 +32,11 @@ COPY bin/{ARG_OS}_{ARG_ARCH}/{ARG_BIN} /{ARG_BIN}
 # USER 65535:65535 -- need permission to access the helm cache file
 ENV HOME /
 
-ENTRYPOINT ["/{ARG_BIN}"]
+ADD installagents.sh /
+RUN apt-get -y update && apt-get -y install curl
+RUN curl -fsSL -o get_helm.sh https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3
+RUN chmod 700 get_helm.sh
+RUN ./get_helm.sh
+RUN chmod +x installagents.sh
+
+ENTRYPOINT ["/installagents.sh", "/{ARG_BIN}"]

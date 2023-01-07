@@ -1,4 +1,9 @@
 apiVersion: v1
+kind: Namespace
+metadata:
+  name: accuknox-agents
+---
+apiVersion: v1
 kind: ConfigMap
 metadata:
   name: agents-operator-config
@@ -109,6 +114,10 @@ spec:
             value: "default"
           - name: cluster_id
             value: "0"
+          - name: helm_repo
+            value: "accuknox-agents-dev"
+          - name: helm_repo_url
+            value: "https://USERNAME:PASSWORD@agents.accuknox.com/repository/accuknox-agents-dev"
         resources:
           requests:
             cpu: 10m
@@ -146,11 +155,11 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: operator-rolebinding
+  name: agents-operator-cluster-admin-binding
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: agents-operator-role
+  name: cluster-admin
 subjects:
 - kind: ServiceAccount
   name: agents-operator-sa
