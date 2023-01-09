@@ -31,7 +31,8 @@ ALL_PLATFORMS ?= linux/amd64
 
 # The "FROM" part of the Dockerfile.  This should be a manifest-list which
 # supports all of the platforms listed in ALL_PLATFORMS.
-BASE_IMAGE ?= gcr.io/distroless/static
+# BASE_IMAGE ?= gcr.io/distroless/static
+BASE_IMAGE ?= ubuntu:latest
 
 # Where to push the docker images.
 REGISTRY ?= accuknox

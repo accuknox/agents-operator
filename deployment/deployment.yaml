@@ -1,4 +1,9 @@
 apiVersion: v1
+kind: Namespace
+metadata:
+  name: accuknox-agents
+---
+apiVersion: v1
 kind: ConfigMap
 metadata:
   name: agents-operator-config
@@ -23,6 +28,7 @@ data:
             limit:
               - value: (n/5 + 1)*200
               - upper-bound: 20000
+        chartname: accuknox-agents-dev/feeder-service-chart
       - name: shared-informer-agent
         container: 
         - resource:
@@ -40,6 +46,7 @@ data:
             limit:
               - value: (n/5 + 1)*100
               - upper-bound: 10000
+        chartname: accuknox-agents-dev/shared-informer-agent-chart
       - name: policy-enforcement-agent
         container: 
         - resource:
@@ -57,6 +64,7 @@ data:
             limit:
               - value: (n/5 + 1)*50
               - upper-bound: 5000
+        chartname:  accuknox-agents-dev/policy-enforcement-agent-chart
       - name: discovery-engine
         container: 
         - resource:
@@ -74,6 +82,7 @@ data:
             limit:
               - value: (n/5 + 1)*200
               - upper-bound: 20000
+        chartname: accuknox-agents-dev/discovery-engine-agent-chart
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -96,6 +105,19 @@ spec:
       - image: accuknox/agents-operator:latest
         imagePullPolicy: Always
         name: agents-operator
+        env:
+          - name: tenant_id
+            value: "0"
+          - name: workspace_id
+            value: "0"
+          - name: cluster_name
+            value: "default"
+          - name: cluster_id
+            value: "0"
+          - name: helm_repo
+            value: "accuknox-agents-dev"
+          - name: helm_repo_url
+            value: "https://USERNAME:PASSWORD@agents.accuknox.com/repository/accuknox-agents-dev"
         resources:
           requests:
             cpu: 10m
@@ -133,11 +155,11 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: operator-rolebinding
+  name: agents-operator-cluster-admin-binding
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: agents-operator-role
+  name: cluster-admin
 subjects:
 - kind: ServiceAccount
   name: agents-operator-sa
