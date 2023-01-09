@@ -21,7 +21,7 @@ spec:
         env:
         {{- range $key, $value  := .Values.props }}
         - name: {{ $key }} 
-          value: {{ required (printf "value for %s is missing" $key) $value }}
+          value: "{{ required (printf "value for %s is missing" $key) $value }}"
         {{- end }} 
         resources:
           {{- toYaml .Values.resources | nindent 10 }}
