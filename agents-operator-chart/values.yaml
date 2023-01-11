@@ -37,7 +37,7 @@ clusterRole:
 
 clusterRoleBinding:
   name: operator-rolebinding
-  clusterRoleName:  agents-operator-role
+  clusterRoleName: cluster-admin
   subjects:
   - kind: ServiceAccount
     name: agents-operator-sa
