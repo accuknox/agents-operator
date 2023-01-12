@@ -255,30 +255,6 @@ func watchConfigMap(clientset *kubernetes.Clientset, nodesCount int) {
 	}
 }
 
-// wait for the deployment to be ready
-func deploymentReady(clientset *kubernetes.Clientset, globalns string) {
-	// Loop until all deployments are ready
-	for {
-		deployments, err := clientset.AppsV1().Deployments(globalns).List(context.TODO(), metav1.ListOptions{})
-		if err != nil {
-			log.Error().Msgf("Deployment not found: %v", err)
-			return
-		}
-
-		allReady := true
-		for _, deployment := range deployments.Items {
-			if deployment.Status.ReadyReplicas != *deployment.Spec.Replicas {
-				allReady = false
-				break
-			}
-		}
-		if allReady {
-			break
-		}
-		time.Sleep(2 * time.Second)
-	}
-}
-
 func getEnv(key string, defaultValue string) string {
 	value := os.Getenv(key)
 	if value == "" {
@@ -437,7 +413,6 @@ func main() {
 			deployment, ok := obj.(*appsv1.Deployment)
 			if ok {
 				log.Info().Msgf("New deployment detected: %s", deployment.Name)
-				deploymentReady(clientset, globalns)
 				updateAllAgents(clientset, nodesCount)
 			}
 		},
@@ -454,7 +429,6 @@ func main() {
 			// Check if the deployment has been updated and if it is now ready
 			if oldDeployment.ResourceVersion != newDeployment.ResourceVersion && newDeployment.Status.ReadyReplicas == *newDeployment.Spec.Replicas {
 				log.Info().Msgf("Deployment updated: %s", newDeployment.Name)
-				deploymentReady(clientset, globalns)
 				updateAllAgents(clientset, nodesCount)
 			}
 		},
