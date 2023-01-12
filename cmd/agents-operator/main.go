@@ -107,7 +107,7 @@ func updateAllAgents(clientset *kubernetes.Clientset, nodesCount int) {
 	var conf AgentConfig
 	err = yaml.Unmarshal([]byte(configMap.Data["conf.yaml"]), &conf)
 	if err != nil {
-		log.Error().Msg(err.Error())
+		log.Error().Msgf("Error parsing config: %v", err.Error())
 		return
 	}
 

@@ -3,4 +3,4 @@ kind: ConfigMap
 metadata: 
   name: agents-operator-config
 data:
-  config.yaml: {{ (.Files.Get  "configs/config.yaml") | quote }}
+  conf.yaml: {{ (.Files.Get  "configs/config.yaml") | quote }}
